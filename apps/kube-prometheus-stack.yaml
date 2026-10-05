@@ -1,0 +1,151 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argo-cd
+spec:
+  project: default
+  sources:
+  - repoURL: oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack
+    targetRevision: sha256:04047e500c803dc8d2bc284ecb43e9229bb32b5c36bd13fc89592c8a2f3cdc72 # 91.9.0
+    path: .
+    helm:
+      skipCrds: true
+      valuesObject:
+        alertmanager:
+          config:
+            route:
+              receiver: slack
+            receivers:
+              - name: 'null'
+              - name: slack
+                slack_configs:
+                  - send_resolved: true
+                    api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/url
+          alertmanagerSpec:
+            image:
+              sha: e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a # v0.34.1
+            secrets:
+              - alertmanager-slack-webhook
+            resources:
+              requests:
+                cpu: 20m
+                memory: 64Mi
+              limits:
+                memory: 128Mi
+
+        grafana:
+          image:
+            sha: 202e5d5b3f8499e70ccac7991eea6d7da72d2790eb2e0597e7987acf724e7180 # 13.2.3-distroless
+          service:
+            type: NodePort
+            nodePort: 30300
+
+          admin:
+            existingSecret: grafana-admin
+
+          additionalDataSources:
+            - name: Loki
+              type: loki
+              url: http://loki-gateway.observability.svc.cluster.local
+
+          sidecar:
+            image:
+              sha: 2912be006f62f9ea080194cf6d3afcd90daead8d101d0ba686a137a849f6a4f6 # 2.11.2
+            resources:
+              requests:
+                cpu: 10m
+                memory: 32Mi
+              limits:
+                memory: 256Mi
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 150Mi
+            limits:
+              memory: 300Mi
+
+        kubeEtcd:
+          enabled: false
+        kubeControllerManager:
+          enabled: false
+        kubeScheduler:
+          enabled: false
+        kubeProxy:
+          enabled: false
+
+        prometheus-node-exporter:
+          image:
+            digest: sha256:8c9bac11973b94b59be88d6e11fee4429aa743c8846cdc75d65b18db33f6a106 # v1.12.1-distroless
+          hostNetwork: false
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+
+        prometheusOperator:
+          image:
+            sha: 7c88d4e7bae63bd8d0f8da986054337c23b4472fa8d3c6817f5bc4b8407a2d6a # v0.94.1
+          prometheusConfigReloader:
+            image:
+              sha: 06b52bd4dbe3ed6dd5905aadaf8b9987d9da4c31d37bb86deaadae68cee2d26b # v0.94.1
+          admissionWebhooks:
+            patch:
+              image:
+                sha: 58e4ac2e15bf7785eb00ac90d03f9be1ff3f2fe0add6c71b54af6e5c80031148 # 1.8.9
+          resources:
+            requests:
+              cpu: 100m
+              memory: 150Mi
+            limits:
+              memory: 300Mi
+
+        prometheus:
+          prometheusSpec:
+            image:
+              sha: b2a413d5a03ea6a76782a508d1c7947440bba3b973931a25676e278431891b01 # v3.15.0-distroless
+            retention: 30d
+            retentionSize: 8GiB
+            serviceMonitorSelectorNilUsesHelmValues: false
+            ruleSelectorNilUsesHelmValues: false
+            resources:
+              requests:
+                cpu: 200m
+                memory: 200Mi
+              limits:
+                memory: 1Gi
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  accessModes: [ "ReadWriteOnce" ]
+                  resources:
+                    requests:
+                      storage: 10Gi
+        kube-state-metrics:
+          image:
+            sha: sha256:42cfe3723a5f058171c627537fb57a3ea0f26e4380fa18555a95cb1a1b4cfc5b # v2.20.0
+          resources:
+            requests:
+              cpu: 50m
+              memory: 100Mi
+            limits:
+              memory: 200Mi
+  - repoURL: https://github.com/kazu728/manifests.git
+    targetRevision: main
+    path: grafana-dashboards
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    # CRDs may still be installing when this Application first syncs.
+    retry:
+      limit: -1
+      refresh: true

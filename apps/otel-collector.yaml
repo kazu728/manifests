@@ -1,0 +1,92 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: otel-collector
+  namespace: argo-cd
+spec:
+  project: default
+  source:
+    repoURL: oci://ghcr.io/open-telemetry/opentelemetry-helm-charts/opentelemetry-collector
+    targetRevision: sha256:a19a95a1d8bb3ba0f8b18b9f6e08a0ce6fa9669d440aab159ff794693cb175f8 # 0.175.0
+    path: .
+    helm:
+      valuesObject:
+        mode: daemonset
+
+        image:
+          repository: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-k8s
+          digest: sha256:2fed8ff024bdb42473890724fa0833bd31e16197aa4790d8e0be3829f87f0de1 # 0.161.0
+
+        presets:
+          logsCollection:
+            enabled: true
+            storeCheckpoints: true
+          kubernetesAttributes:
+            enabled: true
+
+        alternateConfig:
+          receivers:
+            otlp:
+              protocols:
+                http:
+                  endpoint: ${env:MY_POD_IP}:4318
+          exporters:
+            otlp_http/loki:
+              endpoint: http://loki-gateway.observability.svc.cluster.local/otlp
+          processors:
+            memory_limiter:
+              check_interval: 5s
+              limit_percentage: 80
+              spike_limit_percentage: 25
+            batch: {}
+          extensions:
+            health_check:
+              endpoint: ${env:MY_POD_IP}:13133
+          service:
+            extensions:
+              - health_check
+            pipelines:
+              logs:
+                receivers:
+                  - otlp
+                processors:
+                  - memory_limiter
+                  - batch
+                exporters:
+                  - otlp_http/loki
+
+        ports:
+          otlp:
+            enabled: false
+          otlp-http:
+            # Use ClusterIP instead of hostPort. Argo CD drops nulls, so use 0
+            # to prevent the chart's default hostPort from resurfacing.
+            hostPort: 0
+          jaeger-compact:
+            enabled: false
+          jaeger-thrift:
+            enabled: false
+          jaeger-grpc:
+            enabled: false
+          zipkin:
+            enabled: false
+
+        service:
+          enabled: true
+          clusterIP: 10.43.0.100
+
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            memory: 256Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

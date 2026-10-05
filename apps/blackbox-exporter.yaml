@@ -1,0 +1,109 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: blackbox-exporter
+  namespace: argo-cd
+spec:
+  project: default
+  source:
+    repoURL: oci://ghcr.io/prometheus-community/charts/prometheus-blackbox-exporter
+    targetRevision: sha256:07bd141fe7d526a36d30cd66ea6a904865c7792c8f92026c23d975e6c701ef5f # 11.19.1
+    path: .
+    helm:
+      valuesObject:
+        image:
+          digest: sha256:e753ff9f3fc458d02cca5eddab5a77e1c175eee484a8925ac7d524f04366c2fc # v0.28.0
+
+        config:
+          modules:
+            http_2xx_insecure:
+              prober: http
+              timeout: 5s
+              http:
+                tls_config:
+                  insecure_skip_verify: true
+            tcp_connect:
+              prober: tcp
+              timeout: 5s
+            icmp:
+              prober: icmp
+              timeout: 5s
+            dns_a:
+              prober: dns
+              timeout: 5s
+              dns:
+                query_name: google.com
+                query_type: A
+
+        serviceMonitor:
+          enabled: true
+          targets:
+            - name: cloudflare-https
+              url: https://www.cloudflare.com/cdn-cgi/trace
+              additionalMetricsRelabels:
+                probe_type: http
+            - name: google-https
+              url: https://www.google.com/generate_204
+              additionalMetricsRelabels:
+                probe_type: http
+            - name: grafana-internal
+              url: http://kube-prometheus-stack-grafana.observability.svc.cluster.local/
+              additionalMetricsRelabels:
+                probe_type: http
+                service: grafana
+            - name: argocd-internal
+              url: https://argo-cd-argocd-server.argo-cd.svc.cluster.local/
+              module: http_2xx_insecure
+              additionalMetricsRelabels:
+                probe_type: http
+                service: argocd
+            - name: cloudflare-tcp
+              url: 1.1.1.1:443
+              module: tcp_connect
+              additionalMetricsRelabels:
+                probe_type: tcp
+            - name: google-tcp
+              url: 8.8.8.8:443
+              module: tcp_connect
+              additionalMetricsRelabels:
+                probe_type: tcp
+            - name: cloudflare-icmp
+              url: 1.1.1.1
+              module: icmp
+              additionalMetricsRelabels:
+                probe_type: icmp
+            - name: google-icmp
+              url: 8.8.8.8
+              module: icmp
+              additionalMetricsRelabels:
+                probe_type: icmp
+            - name: cloudflare-dns
+              url: 1.1.1.1:53
+              module: dns_a
+              additionalMetricsRelabels:
+                probe_type: dns
+            - name: google-dns
+              url: 8.8.8.8:53
+              module: dns_a
+              additionalMetricsRelabels:
+                probe_type: dns
+
+        resources:
+          requests:
+            cpu: 20m
+            memory: 32Mi
+          limits:
+            memory: 128Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    # CRDs may still be installing when this Application first syncs.
+    retry:
+      limit: -1
+      refresh: true

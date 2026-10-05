@@ -1,0 +1,122 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki
+  namespace: argo-cd
+spec:
+  project: default
+  sources:
+  - repoURL: oci://ghcr.io/grafana-community/helm-charts/loki
+    targetRevision: sha256:e1895eab42130d19a574e1c7a19af84d7e03a8f7fbe2fc6da5fa7e878f15c2bd # 18.13.7
+    path: .
+    helm:
+      valuesObject:
+        loki:
+          image:
+            digest: sha256:1107dd5274e0ada47e42472b7a7e71f3b2a2fe878878108f3e2f9e51528f0193 # 3.7.8
+          auth_enabled: false
+          commonConfig:
+            replication_factor: 1
+          storage:
+            type: filesystem
+          schemaConfig:
+            configs:
+              - from: "2024-04-01"
+                store: tsdb
+                object_store: filesystem
+                schema: v13
+                index:
+                  prefix: index_
+                  period: 24h
+          limits_config:
+            retention_period: 7d
+          compactor:
+            retention_enabled: true
+            delete_request_store: filesystem
+          rulerConfig:
+            storage:
+              type: local
+              local:
+                directory: /rules
+            # Scratch dir must differ from the read path (/rules); the ruler
+            # cleans rule_path on sync.
+            rule_path: /tmp/loki-rules-scratch
+            alertmanager_url: http://kube-prometheus-stack-alertmanager.observability.svc.cluster.local:9093
+
+        singleBinary:
+          replicas: 1
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+
+        chunksCache:
+          enabled: false
+        resultsCache:
+          enabled: false
+
+        gateway:
+          image:
+            digest: sha256:26b0bf6fbf07297983cb341998d79c831508787de26627dd2a112321b9c3a4af # 1.31-alpine
+          metrics:
+            image:
+              digest: sha256:3cb30dcc03071b3f35ff06b1ed426ae712acb351469dc6349ced68d4ba18c54a # 0.4.21
+            resources:
+              requests:
+                cpu: 10m
+                memory: 32Mi
+              limits:
+                memory: 128Mi
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution: []
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+
+        sidecar:
+          image:
+            digest: sha256:2912be006f62f9ea080194cf6d3afcd90daead8d101d0ba686a137a849f6a4f6 # 2.11.2
+          rules:
+            # Tenant dir: auth_enabled=false means the single tenant "fake"
+            folder: /rules/fake
+
+        monitoring:
+          serviceMonitor:
+            enabled: true
+          rules:
+            enabled: true
+          alerts:
+            enabled: true
+
+        lokiCanary:
+          image:
+            digest: sha256:5619fbc071c5fc04825e947e55d87458aac0b22e96b8e893e4ab8dd17d2cf735 # 3.7.8
+
+        read:
+          replicas: 0
+        write:
+          replicas: 0
+        backend:
+          replicas: 0
+  - repoURL: https://github.com/kazu728/manifests.git
+    targetRevision: main
+    path: loki-rules
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: observability
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    # CRDs may still be installing when this Application first syncs.
+    retry:
+      limit: -1
+      refresh: true
